@@ -70,6 +70,18 @@ public class StatusPanel extends JPanel implements GameObserver {
                 statusLabel.setText("Stalemate!");
                 turnLabel.setText("Game drawn");
             }
+            case DRAW_BY_REPETITION -> {
+                statusLabel.setText("Draw by repetition");
+                turnLabel.setText("Game drawn");
+            }
+            case DRAW_BY_FIFTY_MOVES -> {
+                statusLabel.setText("Draw by 50-move rule");
+                turnLabel.setText("Game drawn");
+            }
+            case DRAW_BY_INSUFFICIENT_MATERIAL -> {
+                statusLabel.setText("Draw by insufficient material");
+                turnLabel.setText("Game drawn");
+            }
             default -> statusLabel.setText("");
         }
     }

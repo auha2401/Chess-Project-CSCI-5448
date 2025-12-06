@@ -6,36 +6,44 @@ import chess.patterns.command.MoveCommand;
 import chess.patterns.observer.GameObserver;
 import chess.patterns.observer.GameSubject;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Main game controller that orchestrates the chess game.
  * 
  * Implements the Observer pattern (GameSubject) for notifying UI components.
  * Uses the Command pattern (CommandHistory) for undo/redo functionality.
- * Uses dependency injection for the board and move validator.
+ * Uses dependency injection for the board, rule set, and player controllers.
  */
 public class Game implements GameSubject {
     
     private final Board board;
-    private final MoveValidator moveValidator;
+    private final RuleSet ruleSet;
     private final CommandHistory commandHistory;
     private final List<GameObserver> observers;
     private final List<Piece> capturedWhitePieces;
     private final List<Piece> capturedBlackPieces;
     private final boolean undoEnabled;
+    private final Deque<Integer> halfMoveHistory;
+    private final List<String> repetitionHistory;
+    private PlayerController whiteController;
+    private PlayerController blackController;
     
     private Color currentPlayer;
     private GameState gameState;
     private int moveNumber;
+    private int halfMoveClock;
     
     /**
      * Creates a new game with dependency injection.
      */
-    public Game(Board board, MoveValidator moveValidator, Color startingPlayer, boolean undoEnabled) {
+    public Game(Board board, RuleSet ruleSet, Color startingPlayer, boolean undoEnabled) {
         this.board = board;
-        this.moveValidator = moveValidator;
+        this.ruleSet = ruleSet;
         this.currentPlayer = startingPlayer;
         this.undoEnabled = undoEnabled;
         this.commandHistory = new CommandHistory();
@@ -44,6 +52,36 @@ public class Game implements GameSubject {
         this.capturedBlackPieces = new ArrayList<>();
         this.gameState = GameState.IN_PROGRESS;
         this.moveNumber = 1;
+        this.halfMoveClock = 0;
+        this.halfMoveHistory = new ArrayDeque<>();
+        this.repetitionHistory = new ArrayList<>();
+        addCurrentStateToRepetition();
+    }
+
+    /**
+     * Injects player controllers for each side.
+     */
+    public void setPlayerControllers(PlayerController whiteController, PlayerController blackController) {
+        this.whiteController = whiteController != null ? whiteController : new HumanPlayerController(Color.WHITE);
+        this.blackController = blackController != null ? blackController : new HumanPlayerController(Color.BLACK);
+    }
+
+    public PlayerController getPlayerController(Color color) {
+        ensureControllers();
+        return color == Color.WHITE ? whiteController : blackController;
+    }
+
+    private PlayerController getCurrentPlayerController() {
+        return getPlayerController(currentPlayer);
+    }
+
+    private void ensureControllers() {
+        if (whiteController == null) {
+            whiteController = new HumanPlayerController(Color.WHITE);
+        }
+        if (blackController == null) {
+            blackController = new HumanPlayerController(Color.BLACK);
+        }
     }
     
     /**
@@ -51,7 +89,7 @@ public class Game implements GameSubject {
      * @return true if the move was made successfully
      */
     public boolean makeMove(Position from, Position to) {
-        return makeMove(from, to, null);
+        return makeMove(from, to, null, getCurrentPlayerController());
     }
     
     /**
@@ -59,11 +97,22 @@ public class Game implements GameSubject {
      * @return true if the move was made successfully
      */
     public boolean makeMove(Position from, Position to, PieceType promotionType) {
+        return makeMove(from, to, promotionType, getCurrentPlayerController());
+    }
+    
+    /**
+     * Attempts to make a move on behalf of the provided controller.
+     */
+    public boolean makeMove(Position from, Position to, PieceType promotionType, PlayerController actor) {
         if (gameState == GameState.CHECKMATE || gameState == GameState.STALEMATE) {
             return false;
         }
         
-        Move move = moveValidator.validateMove(board, from, to, currentPlayer);
+        if (actor != null && actor.getColor() != currentPlayer) {
+            return false;
+        }
+        
+        Move move = ruleSet.validateMove(board, from, to, currentPlayer);
         if (move == null) {
             return false;
         }
@@ -74,6 +123,9 @@ public class Game implements GameSubject {
                            move.getMoveType(), promotionType);
         }
         
+        // Track half-move clock for undo
+        halfMoveHistory.push(halfMoveClock);
+
         // Execute the move using Command pattern
         MoveCommand command = new MoveCommand(board, move);
         commandHistory.executeCommand(command);
@@ -88,6 +140,13 @@ public class Game implements GameSubject {
             }
             notifyPieceCaptured(captured);
         }
+
+        // Update half-move clock (reset on pawn move or capture)
+        if (move.getPiece().getType() == PieceType.PAWN || command.getCapturedPiece() != null) {
+            halfMoveClock = 0;
+        } else {
+            halfMoveClock++;
+        }
         
         // Notify observers of the move
         notifyMoveMade(move);
@@ -99,6 +158,8 @@ public class Game implements GameSubject {
             moveNumber++;
         }
         notifyTurnChanged();
+
+        addCurrentStateToRepetition();
         
         // Update game state
         updateGameState();
@@ -114,6 +175,8 @@ public class Game implements GameSubject {
         if (!undoEnabled || !commandHistory.canUndo()) {
             return false;
         }
+
+        removeCurrentStateFromRepetition();
         
         MoveCommand lastCommand = (MoveCommand) commandHistory.getLastCommand();
         Move lastMove = lastCommand.getMove();
@@ -129,6 +192,13 @@ public class Game implements GameSubject {
         }
         
         commandHistory.undo();
+
+        // Restore half-move clock
+        if (!halfMoveHistory.isEmpty()) {
+            halfMoveClock = halfMoveHistory.pop();
+        } else {
+            halfMoveClock = 0;
+        }
         
         // Switch back to previous player
         currentPlayer = currentPlayer.opposite();
@@ -167,12 +237,22 @@ public class Game implements GameSubject {
                 capturedBlackPieces.add(captured);
             }
         }
+
+        // Update half-move clock (track previous for undo)
+        halfMoveHistory.push(halfMoveClock);
+        if (command.getMove().getPiece().getType() == PieceType.PAWN || command.getCapturedPiece() != null) {
+            halfMoveClock = 0;
+        } else {
+            halfMoveClock++;
+        }
         
         // Switch players
         currentPlayer = currentPlayer.opposite();
         if (currentPlayer == Color.WHITE) {
             moveNumber++;
         }
+
+        addCurrentStateToRepetition();
         
         // Notify observers
         notifyMoveMade(command.getMove());
@@ -187,7 +267,7 @@ public class Game implements GameSubject {
      * Gets all legal moves for the piece at the given position.
      */
     public List<Move> getLegalMoves(Position position) {
-        return moveValidator.getLegalMoves(board, position, currentPlayer);
+        return ruleSet.getLegalMoves(board, position, currentPlayer);
     }
     
     /**
@@ -204,7 +284,18 @@ public class Game implements GameSubject {
     }
     
     private void updateGameState() {
-        gameState = moveValidator.getGameState(board, currentPlayer);
+        gameState = ruleSet.getGameState(board, currentPlayer);
+
+        // Apply draw conditions beyond the base rule set
+        if (gameState != GameState.CHECKMATE && gameState != GameState.STALEMATE) {
+            if (halfMoveClock >= 100) {
+                gameState = GameState.DRAW_BY_FIFTY_MOVES;
+            } else if (hasThreefoldRepetition()) {
+                gameState = GameState.DRAW_BY_REPETITION;
+            } else if (hasInsufficientMaterial()) {
+                gameState = GameState.DRAW_BY_INSUFFICIENT_MATERIAL;
+            }
+        }
         notifyGameStateChanged();
     }
     
@@ -292,6 +383,10 @@ public class Game implements GameSubject {
                new ArrayList<>(capturedWhitePieces) : 
                new ArrayList<>(capturedBlackPieces);
     }
+
+    public int getHalfMoveClock() {
+        return halfMoveClock;
+    }
     
     public boolean canUndo() {
         return undoEnabled && commandHistory.canUndo();
@@ -303,5 +398,151 @@ public class Game implements GameSubject {
     
     public CommandHistory getCommandHistory() {
         return commandHistory;
+    }
+
+    /**
+     * Initializes game metadata for a loaded position.
+     */
+    public void initializeFromPosition(Color currentPlayer, int moveNumber, int halfMoveClock) {
+        this.currentPlayer = currentPlayer;
+        this.moveNumber = Math.max(moveNumber, 1);
+        this.halfMoveClock = Math.max(halfMoveClock, 0);
+
+        repetitionHistory.clear();
+        halfMoveHistory.clear();
+        addCurrentStateToRepetition();
+        updateGameState();
+    }
+
+    // === Draw detection helpers ===
+
+    private void addCurrentStateToRepetition() {
+        String key = computeStateKey();
+        repetitionHistory.add(key);
+    }
+
+    private void removeCurrentStateFromRepetition() {
+        if (repetitionHistory.isEmpty()) {
+            return;
+        }
+        repetitionHistory.remove(repetitionHistory.size() - 1);
+    }
+
+    private boolean hasThreefoldRepetition() {
+        if (repetitionHistory.isEmpty()) {
+            return false;
+        }
+        String key = repetitionHistory.get(repetitionHistory.size() - 1);
+        int occurrences = 0;
+        for (String state : repetitionHistory) {
+            if (state.equals(key)) {
+                occurrences++;
+                if (occurrences >= 3) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean hasInsufficientMaterial() {
+        int bishops = 0;
+        int knights = 0;
+        boolean hasOtherMaterial = false;
+        List<Boolean> bishopSquareColors = new ArrayList<>();
+
+        for (Map.Entry<Position, Piece> entry : board.getAllPieces().entrySet()) {
+            Piece piece = entry.getValue();
+            switch (piece.getType()) {
+                case PAWN, ROOK, QUEEN -> hasOtherMaterial = true;
+                case BISHOP -> {
+                    bishops++;
+                    Position pos = entry.getKey();
+                    bishopSquareColors.add((pos.getFile() + pos.getRank()) % 2 == 0);
+                }
+                case KNIGHT -> knights++;
+                default -> { /* kings ignored */ }
+            }
+            if (hasOtherMaterial) {
+                return false;
+            }
+        }
+
+        int minorCount = bishops + knights;
+        if (minorCount == 0) {
+            return true; // kings only
+        }
+        if (minorCount == 1) {
+            return true; // single bishop or knight
+        }
+        if (minorCount == 2 && knights == 2) {
+            return true; // two knights vs king
+        }
+        if (minorCount == 2 && bishops == 2) {
+            boolean allSameColor = bishopSquareColors.stream().allMatch(bishopSquareColors.get(0)::equals);
+            if (allSameColor) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String computeStateKey() {
+        StringBuilder sb = new StringBuilder();
+        sb.append(currentPlayer);
+
+        // Piece placement
+        for (int rank = 0; rank < 8; rank++) {
+            for (int file = 0; file < 8; file++) {
+                Position pos = new Position(file, rank);
+                Piece piece = board.getPieceAt(pos);
+                if (piece == null) {
+                    sb.append('.');
+                } else {
+                    char c = switch (piece.getType()) {
+                        case PAWN -> 'p';
+                        case KNIGHT -> 'n';
+                        case BISHOP -> 'b';
+                        case ROOK -> 'r';
+                        case QUEEN -> 'q';
+                        case KING -> 'k';
+                    };
+                    if (piece.getColor() == Color.WHITE) {
+                        c = Character.toUpperCase(c);
+                    }
+                    sb.append(c);
+                }
+            }
+        }
+
+        // Castling rights
+        sb.append('|').append(getCastlingRights());
+
+        // En passant target
+        sb.append('|');
+        Position ep = board.getEnPassantTarget();
+        sb.append(ep != null ? ep.toAlgebraic() : "-");
+
+        return sb.toString();
+    }
+
+    private String getCastlingRights() {
+        StringBuilder rights = new StringBuilder();
+        Piece whiteKing = board.getPieceAt(Position.fromAlgebraic("e1"));
+        Piece whiteRookA = board.getPieceAt(Position.fromAlgebraic("a1"));
+        Piece whiteRookH = board.getPieceAt(Position.fromAlgebraic("h1"));
+        Piece blackKing = board.getPieceAt(Position.fromAlgebraic("e8"));
+        Piece blackRookA = board.getPieceAt(Position.fromAlgebraic("a8"));
+        Piece blackRookH = board.getPieceAt(Position.fromAlgebraic("h8"));
+
+        if (whiteKing instanceof King wk && !wk.hasMoved()) {
+            if (whiteRookH instanceof Rook wr && !wr.hasMoved()) rights.append('K');
+            if (whiteRookA instanceof Rook wr && !wr.hasMoved()) rights.append('Q');
+        }
+        if (blackKing instanceof King bk && !bk.hasMoved()) {
+            if (blackRookH instanceof Rook br && !br.hasMoved()) rights.append('k');
+            if (blackRookA instanceof Rook br && !br.hasMoved()) rights.append('q');
+        }
+        return rights.length() == 0 ? "-" : rights.toString();
     }
 }

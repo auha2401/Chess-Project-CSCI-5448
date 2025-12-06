@@ -58,11 +58,28 @@ public class GamePersistence {
             writer.println(getResultString(game.getGameState()));
         }
     }
+
+    /**
+     * Saves the current position to a file as a single FEN string.
+     */
+    public void saveFEN(Game game, String filename) throws IOException {
+        String fen = toFEN(game.getBoard(), game.getCurrentPlayer(), game.getMoveNumber(), game.getHalfMoveClock());
+        try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
+            writer.println(fen);
+        }
+    }
     
     /**
      * Saves the current board position in FEN format.
      */
     public String toFEN(Board board, Color currentPlayer, int moveNumber) {
+        return toFEN(board, currentPlayer, moveNumber, 0);
+    }
+
+    /**
+     * Saves the current board position in FEN format including halfmove clock.
+     */
+    public String toFEN(Board board, Color currentPlayer, int moveNumber, int halfMoveClock) {
         StringBuilder fen = new StringBuilder();
         
         // Piece placement
@@ -91,8 +108,8 @@ public class GamePersistence {
         // Active color
         fen.append(" ").append(currentPlayer == Color.WHITE ? "w" : "b");
         
-        // Castling availability (simplified - would need to track this properly)
-        fen.append(" KQkq");
+        // Castling availability based on piece moved flags
+        fen.append(" ").append(getCastlingRights(board));
         
         // En passant target
         Position epTarget = board.getEnPassantTarget();
@@ -102,8 +119,8 @@ public class GamePersistence {
             fen.append(" -");
         }
         
-        // Halfmove clock (simplified)
-        fen.append(" 0");
+        // Halfmove clock
+        fen.append(" ").append(halfMoveClock);
         
         // Fullmove number
         fen.append(" ").append(moveNumber);
@@ -119,11 +136,26 @@ public class GamePersistence {
         
         Board board = new BoardBuilder().fromFEN(fen).build();
         Color currentPlayer = parts[1].equals("w") ? Color.WHITE : Color.BLACK;
+
+        // Castling rights adjust moved flags
+        applyCastlingRights(board, parts.length > 2 ? parts[2] : "-");
+
+        // En passant target
+        if (parts.length > 3 && !parts[3].equals("-")) {
+            board.setEnPassantTarget(Position.fromAlgebraic(parts[3]));
+        }
+
+        int halfMoveClock = parts.length > 4 ? parseIntSafe(parts[4], 0) : 0;
+        int moveNumber = parts.length > 5 ? parseIntSafe(parts[5], 1) : 1;
         
-        return new GameBuilder()
+        Game game = new GameBuilder()
             .withBoard(board)
             .withStartingPlayer(currentPlayer)
             .build();
+
+        game.initializeFromPosition(currentPlayer, moveNumber, halfMoveClock);
+
+        return game;
     }
     
     private char pieceToFENChar(Piece piece) {
@@ -145,6 +177,68 @@ public class GamePersistence {
                  DRAW_BY_INSUFFICIENT_MATERIAL, DRAW_BY_AGREEMENT -> "1/2-1/2";
             default -> "*";
         };
+    }
+
+    private String getCastlingRights(Board board) {
+        StringBuilder rights = new StringBuilder();
+        Piece whiteKing = board.getPieceAt(Position.fromAlgebraic("e1"));
+        Piece whiteRookA = board.getPieceAt(Position.fromAlgebraic("a1"));
+        Piece whiteRookH = board.getPieceAt(Position.fromAlgebraic("h1"));
+        Piece blackKing = board.getPieceAt(Position.fromAlgebraic("e8"));
+        Piece blackRookA = board.getPieceAt(Position.fromAlgebraic("a8"));
+        Piece blackRookH = board.getPieceAt(Position.fromAlgebraic("h8"));
+
+        if (whiteKing instanceof King wk && !wk.hasMoved()) {
+            if (whiteRookH instanceof Rook wr && !wr.hasMoved()) rights.append('K');
+            if (whiteRookA instanceof Rook wr && !wr.hasMoved()) rights.append('Q');
+        }
+        if (blackKing instanceof King bk && !bk.hasMoved()) {
+            if (blackRookH instanceof Rook br && !br.hasMoved()) rights.append('k');
+            if (blackRookA instanceof Rook br && !br.hasMoved()) rights.append('q');
+        }
+        return rights.length() == 0 ? "-" : rights.toString();
+    }
+
+    private void applyCastlingRights(Board board, String rights) {
+        // If a right is missing, mark the corresponding king/rook as moved to disable castling.
+        Piece whiteKing = board.getPieceAt(Position.fromAlgebraic("e1"));
+        Piece whiteRookA = board.getPieceAt(Position.fromAlgebraic("a1"));
+        Piece whiteRookH = board.getPieceAt(Position.fromAlgebraic("h1"));
+        Piece blackKing = board.getPieceAt(Position.fromAlgebraic("e8"));
+        Piece blackRookA = board.getPieceAt(Position.fromAlgebraic("a8"));
+        Piece blackRookH = board.getPieceAt(Position.fromAlgebraic("h8"));
+
+        boolean whiteKingSide = rights.contains("K");
+        boolean whiteQueenSide = rights.contains("Q");
+        boolean blackKingSide = rights.contains("k");
+        boolean blackQueenSide = rights.contains("q");
+
+        if (!whiteKingSide && !whiteQueenSide && whiteKing instanceof King wk) {
+            wk.setMoved(true);
+        }
+        if (!whiteKingSide && whiteRookH instanceof Rook wr) {
+            wr.setMoved(true);
+        }
+        if (!whiteQueenSide && whiteRookA instanceof Rook wr) {
+            wr.setMoved(true);
+        }
+        if (!blackKingSide && !blackQueenSide && blackKing instanceof King bk) {
+            bk.setMoved(true);
+        }
+        if (!blackKingSide && blackRookH instanceof Rook br) {
+            br.setMoved(true);
+        }
+        if (!blackQueenSide && blackRookA instanceof Rook br) {
+            br.setMoved(true);
+        }
+    }
+
+    private int parseIntSafe(String value, int defaultVal) {
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return defaultVal;
+        }
     }
     
     /**

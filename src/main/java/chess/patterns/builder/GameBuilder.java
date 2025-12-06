@@ -1,6 +1,9 @@
 package chess.patterns.builder;
 
 import chess.controller.Game;
+import chess.controller.HumanPlayerController;
+import chess.controller.PlayerController;
+import chess.controller.RuleSet;
 import chess.controller.MoveValidator;
 import chess.model.Board;
 import chess.model.Color;
@@ -18,10 +21,12 @@ import java.util.List;
 public class GameBuilder {
     
     private Board board;
-    private MoveValidator moveValidator;
+    private RuleSet ruleSet;
     private Color startingPlayer;
     private List<GameObserver> observers;
     private boolean enableUndo;
+    private PlayerController whiteController;
+    private PlayerController blackController;
     
     public GameBuilder() {
         this.observers = new ArrayList<>();
@@ -46,10 +51,18 @@ public class GameBuilder {
     }
     
     /**
-     * Sets a custom move validator (dependency injection).
+     * Sets a custom rule set (dependency injection).
+     */
+    public GameBuilder withRuleSet(RuleSet ruleSet) {
+        this.ruleSet = ruleSet;
+        return this;
+    }
+
+    /**
+     * Backwards-compatible helper for injecting a move validator as the rule set.
      */
     public GameBuilder withMoveValidator(MoveValidator validator) {
-        this.moveValidator = validator;
+        this.ruleSet = validator;
         return this;
     }
     
@@ -76,6 +89,15 @@ public class GameBuilder {
         this.enableUndo = enabled;
         return this;
     }
+
+    /**
+     * Supplies controllers for white and black players.
+     */
+    public GameBuilder withPlayerControllers(PlayerController white, PlayerController black) {
+        this.whiteController = white;
+        this.blackController = black;
+        return this;
+    }
     
     /**
      * Builds and returns the configured Game instance.
@@ -86,12 +108,16 @@ public class GameBuilder {
             board = new BoardBuilder().withStandardSetup().build();
         }
         
-        if (moveValidator == null) {
-            moveValidator = new MoveValidator();
+        if (ruleSet == null) {
+            ruleSet = new MoveValidator();
         }
         
         // Create the game with dependency injection
-        Game game = new Game(board, moveValidator, startingPlayer, enableUndo);
+        Game game = new Game(board, ruleSet, startingPlayer, enableUndo);
+        game.setPlayerControllers(
+                whiteController != null ? whiteController : new HumanPlayerController(Color.WHITE),
+                blackController != null ? blackController : new HumanPlayerController(Color.BLACK)
+        );
         
         // Register all observers
         for (GameObserver observer : observers) {

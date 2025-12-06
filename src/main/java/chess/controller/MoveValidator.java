@@ -11,7 +11,7 @@ import java.util.Map;
  * Validates chess moves according to the rules.
  * Uses the Strategy pattern via piece movement strategies.
  */
-public class MoveValidator {
+public class MoveValidator implements RuleSet {
     
     /**
      * Returns all legal moves for a piece at the given position.

@@ -293,6 +293,18 @@ public class ChessBoardPanel extends JPanel implements GameObserver {
             JOptionPane.showMessageDialog(this,
                     "Game drawn by stalemate!",
                     "Game Over", JOptionPane.INFORMATION_MESSAGE);
+        } else if (state == GameState.DRAW_BY_REPETITION) {
+            JOptionPane.showMessageDialog(this,
+                    "Game drawn by threefold repetition.",
+                    "Game Over", JOptionPane.INFORMATION_MESSAGE);
+        } else if (state == GameState.DRAW_BY_FIFTY_MOVES) {
+            JOptionPane.showMessageDialog(this,
+                    "Game drawn by 50-move rule.",
+                    "Game Over", JOptionPane.INFORMATION_MESSAGE);
+        } else if (state == GameState.DRAW_BY_INSUFFICIENT_MATERIAL) {
+            JOptionPane.showMessageDialog(this,
+                    "Game drawn by insufficient material.",
+                    "Game Over", JOptionPane.INFORMATION_MESSAGE);
         }
     }
 

@@ -212,15 +212,15 @@ public class ChessFrame extends JFrame {
     private void saveGame() {
         JFileChooser chooser = new JFileChooser();
         chooser.setDialogTitle("Save Game");
-        chooser.setSelectedFile(new File("chess_game.pgn"));
+        chooser.setSelectedFile(new File("chess_position.txt"));
 
         if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
             try {
-                persistence.saveGame(game, chooser.getSelectedFile().getAbsolutePath());
-                JOptionPane.showMessageDialog(this, "Game saved successfully!");
+                persistence.saveFEN(game, chooser.getSelectedFile().getAbsolutePath());
+                JOptionPane.showMessageDialog(this, "Position saved (FEN) successfully!");
             } catch (Exception e) {
                 JOptionPane.showMessageDialog(this,
-                        "Error saving game: " + e.getMessage(),
+                        "Error saving position: " + e.getMessage(),
                         "Error", JOptionPane.ERROR_MESSAGE);
             }
         }
@@ -265,7 +265,7 @@ public class ChessFrame extends JFrame {
     }
 
     private void copyFEN() {
-        String fen = persistence.toFEN(game.getBoard(), game.getCurrentPlayer(), game.getMoveNumber());
+        String fen = persistence.toFEN(game.getBoard(), game.getCurrentPlayer(), game.getMoveNumber(), game.getHalfMoveClock());
         java.awt.datatransfer.StringSelection selection =
                 new java.awt.datatransfer.StringSelection(fen);
         java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(selection, selection);
